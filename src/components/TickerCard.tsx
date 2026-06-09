@@ -6,6 +6,8 @@ import {
   formatPrice,
   formatTime,
 } from "@/lib/format";
+import { Sparkline } from "./Sparkline";
+import { RangeBar } from "./RangeBar";
 
 type Props = {
   quote: Quote;
@@ -78,6 +80,17 @@ export function TickerCard({ quote }: Props) {
         <span>Δ {formatChange(quote.change, config)}</span>
         <span>Prev {formatPrice(quote.previousClose, config)}</span>
       </div>
+
+      <div className="-mx-1 flex items-center">
+        <Sparkline points={quote.history} width={240} height={36} className="w-full" />
+      </div>
+
+      <RangeBar
+        low={quote.range30d.low}
+        high={quote.range30d.high}
+        current={quote.price}
+        config={config}
+      />
 
       <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
         <div

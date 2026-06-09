@@ -1,5 +1,6 @@
 import YahooFinance from "yahoo-finance2";
 import { TICKERS, type TickerConfig } from "./tickers";
+import { getHistorySeries, type HistoryPoint } from "./history";
 
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
@@ -17,6 +18,9 @@ export type Quote = {
   dayLow: number | null;
   fiftyTwoWeekHigh: number | null;
   fiftyTwoWeekLow: number | null;
+  /** Last ~30 daily closes for sparkline + range context. */
+  history: HistoryPoint[];
+  range30d: { low: number | null; high: number | null };
   /** Resolved against the matching TickerConfig for convenience on the client. */
   config: TickerConfig;
   error?: string;
@@ -59,16 +63,15 @@ function toIsoMaybe(value: Date | number | string | undefined): string | null {
 export async function fetchQuotes(): Promise<QuotesPayload> {
   const symbols = TICKERS.map((t) => t.symbol);
 
-  let raw: unknown;
-  try {
-    raw = await yahooFinance.quote(
-      symbols,
-      { return: "array" },
-      { validateResult: false },
-    );
-  } catch (err) {
-    console.error("yahoo-finance quote failed", err);
-  }
+  const [raw, historyMap] = await Promise.all([
+    yahooFinance
+      .quote(symbols, { return: "array" }, { validateResult: false })
+      .catch((err: unknown) => {
+        console.error("yahoo-finance quote failed", err);
+        return undefined;
+      }),
+    getHistorySeries(symbols),
+  ]);
 
   const list: RawQuote[] = Array.isArray(raw)
     ? (raw as RawQuote[])
@@ -83,6 +86,10 @@ export async function fetchQuotes(): Promise<QuotesPayload> {
 
   const quotes: Quote[] = TICKERS.map((config) => {
     const q = bySymbol.get(config.symbol);
+    const series = historyMap.get(config.symbol);
+    const history = series?.points ?? [];
+    const range30d = { low: series?.low ?? null, high: series?.high ?? null };
+
     if (!q) {
       return {
         symbol: config.symbol,
@@ -98,6 +105,8 @@ export async function fetchQuotes(): Promise<QuotesPayload> {
         dayLow: null,
         fiftyTwoWeekHigh: null,
         fiftyTwoWeekLow: null,
+        history,
+        range30d,
         config,
         error: "no_data",
       };
@@ -128,6 +137,8 @@ export async function fetchQuotes(): Promise<QuotesPayload> {
       dayLow: q.regularMarketDayLow ?? null,
       fiftyTwoWeekHigh: q.fiftyTwoWeekHigh ?? null,
       fiftyTwoWeekLow: q.fiftyTwoWeekLow ?? null,
+      history,
+      range30d,
       config,
     };
   });
