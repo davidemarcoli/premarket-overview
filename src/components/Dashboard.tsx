@@ -13,6 +13,8 @@ import { computeInsights } from "@/lib/insights";
 import { TickerCard } from "./TickerCard";
 import { SentimentBanner } from "./SentimentBanner";
 import { InsightPanel } from "./InsightPanel";
+import { SessionStrip } from "./SessionStrip";
+import { VTProjection } from "./VTProjection";
 
 const REFRESH_MS = 60_000;
 
@@ -110,7 +112,11 @@ export function Dashboard({ initial }: Props) {
         </div>
       )}
 
+      <SessionStrip />
+
       <SentimentBanner sentiment={sentiment} />
+
+      <VTProjection quotes={payload.quotes} />
 
       <InsightPanel insights={insights} />
 
