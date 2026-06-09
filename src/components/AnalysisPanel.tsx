@@ -54,33 +54,7 @@ export function AnalysisPanel() {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState<Date | null>(null);
 
-  // Hydrate from server cache on mount.
-  useEffect(() => {
-    setNow(new Date());
-    const id = setInterval(() => setNow(new Date()), 30_000);
-    (async () => {
-      try {
-        const res = await fetch("/api/analyze", { cache: "no-store" });
-        const data = (await res.json()) as GetResponse;
-        if (data.ok && "cached" in data && data.cached) {
-          setCached({
-            analysis: data.analysis,
-            generatedAt: data.generatedAt,
-            latencyMs: data.latencyMs,
-            fresh: data.fresh,
-            provider: data.provider,
-            sources: data.sources,
-            searchQueries: data.searchQueries,
-          });
-        }
-      } catch {
-        // Silent: cached read is best-effort.
-      }
-    })();
-    return () => clearInterval(id);
-  }, []);
-
-  const handleGenerate = async () => {
+  const generate = async () => {
     setLoading(true);
     setError(null);
     try {
@@ -105,6 +79,45 @@ export function AnalysisPanel() {
       setLoading(false);
     }
   };
+
+  // On mount: read server cache. If we got a fresh cached analysis, show it.
+  // If the cache is missing or stale (>10 min, beyond the route's TTL), POST
+  // automatically — the server-side cache + in-flight coalescing keeps this
+  // bounded to at most one real generation per 10-min window across all tabs.
+  useEffect(() => {
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    (async () => {
+      let hadCache = false;
+      let cacheFresh = false;
+      try {
+        const res = await fetch("/api/analyze", { cache: "no-store" });
+        const data = (await res.json()) as GetResponse;
+        if (data.ok && "cached" in data && data.cached) {
+          hadCache = true;
+          cacheFresh = data.fresh;
+          setCached({
+            analysis: data.analysis,
+            generatedAt: data.generatedAt,
+            latencyMs: data.latencyMs,
+            fresh: data.fresh,
+            provider: data.provider,
+            sources: data.sources,
+            searchQueries: data.searchQueries,
+          });
+        }
+      } catch {
+        // Silent: cached read is best-effort.
+      }
+      if (!hadCache || !cacheFresh) {
+        // Fire-and-forget; generate() manages its own loading state.
+        void generate();
+      }
+    })();
+    return () => clearInterval(id);
+  }, []);
+
+  const handleGenerate = generate;
 
   const generatedAt = cached ? new Date(cached.generatedAt) : null;
   const ageLabel = generatedAt && now ? relative(generatedAt, now) : null;
@@ -154,11 +167,16 @@ export function AnalysisPanel() {
           </div>
         )}
 
+        {!cached && !error && loading && (
+          <div className="mt-3 rounded-xl bg-zinc-50 px-4 py-3 text-sm text-zinc-500 ring-1 ring-zinc-200/70 dark:bg-zinc-950/60 dark:ring-zinc-800">
+            Generating first synthesis… usually takes 5–10 seconds with grounding.
+          </div>
+        )}
+
         {!cached && !error && !loading && (
           <div className="mt-3 rounded-xl bg-zinc-50 px-4 py-3 text-sm text-zinc-500 ring-1 ring-zinc-200/70 dark:bg-zinc-950/60 dark:ring-zinc-800">
-            Press <span className="font-medium">Generate analysis</span> to get a
-            three-paragraph synthesis of what the dashboard is showing right now —
-            the setup, what&apos;s notable, and what to watch next.
+            Press <span className="font-medium">Generate analysis</span> for a
+            three-paragraph synthesis of the current tape.
           </div>
         )}
 

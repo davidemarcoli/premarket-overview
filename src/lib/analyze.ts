@@ -23,20 +23,28 @@ const DEEPSEEK_MODEL = "deepseek-v4-flash";
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 /**
- * Default model. `gemini-3.1-flash-lite` was chosen for its much higher free
- * limits (15 RPM / 500 RPD) over `gemini-3.5-flash` (5 RPM / 20 RPD). On
- * personal-tier keys 3.x models' grounding quota is exhausted and 429s — the
- * `callGemini` retry transparently drops grounding so the synthesis still
- * works. Swap to `gemini-2.5-flash` via env if you want grounded analysis
- * (live web context) at the cost of tighter daily limits.
+ * Default model. `gemma-4-31b-it` was picked for three reasons:
+ * 1. 1500 RPD vs gemini-3.x-flash's 500 RPD — 3x daily headroom for casual use.
+ * 2. Grounding with Google Search actually works on Gemma (returns real
+ *    groundingMetadata + cited URLs), unlike Gemini 3.x on free-tier keys
+ *    where the grounded call 429s.
+ * 3. Higher-quality synthesis than gemini-3.1-flash-lite.
+ *
+ * Trade-off: Gemma is a "thinking" model. The chain-of-thought is billed
+ * against `maxOutputTokens`, so we set it generously. End-to-end latency runs
+ * ~5–10s per generation, which is fine for a button-triggered panel.
+ *
+ * Alternatives via env override:
+ *   GEMINI_MODEL=gemma-4-26b-a4b-it     # smaller MoE, faster, similar quota
+ *   GEMINI_MODEL=gemini-2.5-flash       # grounding works, tight 20 RPD limit
+ *   GEMINI_MODEL=gemini-3.1-flash-lite  # fastest, no grounding, 500 RPD
  */
-const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.1-flash-lite";
-// Default off because Gemini 3.x's grounding quota is exhausted on free-tier
-// keys and the grounded attempt always 429s before our fallback retries
-// without it (wasting ~200ms per generation). Set GEMINI_GROUNDING=on if you
-// switch GEMINI_MODEL to gemini-2.5-flash, where grounding still works.
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemma-4-31b-it";
+// On by default. Set GEMINI_GROUNDING=off if you swap to a model whose
+// grounding quota is exhausted (most Gemini 3.x models on free-tier keys),
+// so we skip the wasted ~200ms grounded attempt.
 const GEMINI_GROUNDING =
-  (process.env.GEMINI_GROUNDING ?? "off").toLowerCase() === "on";
+  (process.env.GEMINI_GROUNDING ?? "on").toLowerCase() !== "off";
 
 export type GroundingSource = {
   title: string;
@@ -78,6 +86,9 @@ function compactTickers(quotes: Quote[]) {
       low != null && high != null && q.price != null && high !== low
         ? Math.round(((q.price - low) / (high - low)) * 100)
         : null;
+    // Last 7 daily closes (oldest first) so the model can see multi-day
+    // trends and say things like "first up day after a week of weakness".
+    const recent7dCloses = q.history.slice(-7).map((p) => Number(p.close.toFixed(4)));
     return {
       symbol: q.symbol,
       name: q.config.short,
@@ -86,6 +97,7 @@ function compactTickers(quotes: Quote[]) {
       changePct: q.changePercent,
       marketState: q.marketState,
       range30dPositionPct: position,
+      recent7dCloses,
     };
   });
 }
@@ -222,8 +234,10 @@ function parseAnalysis(text: string): Analysis | { error: string } {
   return parsed as Analysis;
 }
 
+type GeminiPart = { text?: string; thought?: boolean };
+
 type GeminiCandidate = {
-  content?: { parts?: Array<{ text?: string }> };
+  content?: { parts?: GeminiPart[] };
   groundingMetadata?: {
     webSearchQueries?: string[];
     groundingChunks?: Array<{ web?: { uri?: string; title?: string } }>;
@@ -254,7 +268,10 @@ async function callGemini(
         ...(withGrounding ? { tools: [{ google_search: {} }] } : {}),
         generationConfig: {
           temperature: 0.4,
-          maxOutputTokens: 1200,
+          // Generous cap because Gemma's chain-of-thought is billed against
+          // output budget. A typical analysis ends up with ~500-1500 thought
+          // tokens + ~250 visible JSON tokens.
+          maxOutputTokens: 2500,
         },
       }),
       cache: "no-store",
@@ -313,8 +330,13 @@ export async function runAnalysisGemini(
 
   const json = (await call.res.json()) as GeminiResponse;
   const candidate = json.candidates?.[0];
+  // Filter out chain-of-thought parts (Gemma marks them with thought: true).
+  // Without this, the model's internal reasoning leaks into the JSON parser.
   const text =
-    candidate?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+    candidate?.content?.parts
+      ?.filter((p) => !p.thought)
+      .map((p) => p.text ?? "")
+      .join("") ?? "";
 
   const parsed = parseAnalysis(text);
   if ("error" in parsed) return { ok: false, error: parsed.error };
