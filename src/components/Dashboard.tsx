@@ -9,8 +9,10 @@ import {
   type TickerCategory,
 } from "@/lib/tickers";
 import { computeSentiment } from "@/lib/sentiment";
+import { computeInsights } from "@/lib/insights";
 import { TickerCard } from "./TickerCard";
 import { SentimentBanner } from "./SentimentBanner";
+import { InsightPanel } from "./InsightPanel";
 
 const REFRESH_MS = 60_000;
 
@@ -52,6 +54,7 @@ export function Dashboard({ initial }: Props) {
   }, []);
 
   const sentiment = useMemo(() => computeSentiment(payload.quotes), [payload]);
+  const insights = useMemo(() => computeInsights(payload.quotes), [payload]);
 
   const grouped = useMemo(() => {
     const map = new Map<TickerCategory, QuotesPayload["quotes"]>();
@@ -108,6 +111,8 @@ export function Dashboard({ initial }: Props) {
       )}
 
       <SentimentBanner sentiment={sentiment} />
+
+      <InsightPanel insights={insights} />
 
       <div className="mt-10 space-y-10">
         {CATEGORY_ORDER.map((cat) => {
