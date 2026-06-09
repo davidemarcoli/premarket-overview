@@ -71,7 +71,7 @@ export function VTProjection({ quotes }: Props) {
           </div>
         </div>
 
-        <ul className="mt-5 space-y-2">
+        <ul className="mt-5 space-y-3">
           {p.contributions.map((c) => {
             const cTone = toneOf(c.contribution ?? 0);
             const widthPct =
@@ -79,38 +79,36 @@ export function VTProjection({ quotes }: Props) {
                 ? 0
                 : (Math.abs(c.contribution) / maxAbs) * 50; // 0..50 of the bar (centered)
             return (
-              <li
-                key={c.proxySymbol}
-                className="flex items-center gap-3 text-sm tabular-nums"
-              >
-                <div className="w-28 shrink-0 text-zinc-700 dark:text-zinc-300">
-                  {c.region}
+              <li key={c.proxySymbol}>
+                <div className="flex items-baseline justify-between text-sm tabular-nums">
+                  <span className="text-zinc-700 dark:text-zinc-300">
+                    {c.region} <span className="text-xs text-zinc-400">({(c.weight * 100).toFixed(0)}%)</span>
+                  </span>
                 </div>
-                <div className="w-12 shrink-0 text-right text-xs text-zinc-500">
-                  {(c.weight * 100).toFixed(0)}%
-                </div>
-                <div className="relative h-2 flex-1 rounded-full bg-zinc-200/60 dark:bg-zinc-800/60">
-                  <div className="absolute inset-y-0 left-1/2 w-px bg-zinc-400/50" />
-                  {c.contribution != null && (
-                    <div
-                      className={`absolute inset-y-0 ${cTone.bar} rounded-full`}
-                      style={
-                        c.contribution >= 0
-                          ? { left: "50%", width: `${widthPct}%` }
-                          : { right: "50%", width: `${widthPct}%` }
-                      }
-                    />
-                  )}
-                </div>
-                <div className="w-20 shrink-0 text-right text-xs text-zinc-500">
-                  {fmtPct(c.changePct)}
-                </div>
-                <div
-                  className={`w-20 shrink-0 text-right text-xs font-medium ${cTone.text}`}
-                >
-                  {c.contribution != null
-                    ? `${c.contribution >= 0 ? "+" : ""}${c.contribution.toFixed(2)} pp`
-                    : "—"}
+                <div className="mt-1 flex items-center gap-2 text-sm tabular-nums">
+                  <div className="relative h-2 flex-1 rounded-full bg-zinc-200/60 dark:bg-zinc-800/60">
+                    <div className="absolute inset-y-0 left-1/2 w-px bg-zinc-400/50" />
+                    {c.contribution != null && (
+                      <div
+                        className={`absolute inset-y-0 ${cTone.bar} rounded-full`}
+                        style={
+                          c.contribution >= 0
+                            ? { left: "50%", width: `${widthPct}%` }
+                            : { right: "50%", width: `${widthPct}%` }
+                        }
+                      />
+                    )}
+                  </div>
+                  <span className="w-16 shrink-0 text-right text-xs text-zinc-500">
+                    {fmtPct(c.changePct)}
+                  </span>
+                  <span
+                    className={`w-16 shrink-0 text-right text-xs font-medium ${cTone.text}`}
+                  >
+                    {c.contribution != null
+                      ? `${c.contribution >= 0 ? "+" : ""}${c.contribution.toFixed(2)}`
+                      : "—"}
+                  </span>
                 </div>
               </li>
             );
