@@ -1,6 +1,7 @@
 import YahooFinance from "yahoo-finance2";
 import { TICKERS, type TickerConfig } from "./tickers";
 import { getHistorySeries, type HistoryPoint } from "./history";
+import { getCalendar, type CalendarEvent } from "./calendar";
 
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
@@ -29,6 +30,7 @@ export type Quote = {
 export type QuotesPayload = {
   fetchedAt: string;
   quotes: Quote[];
+  calendar: CalendarEvent[];
 };
 
 type RawQuote = Record<string, unknown> & {
@@ -63,7 +65,7 @@ function toIsoMaybe(value: Date | number | string | undefined): string | null {
 export async function fetchQuotes(): Promise<QuotesPayload> {
   const symbols = TICKERS.map((t) => t.symbol);
 
-  const [raw, historyMap] = await Promise.all([
+  const [raw, historyMap, calendar] = await Promise.all([
     yahooFinance
       .quote(symbols, { return: "array" }, { validateResult: false })
       .catch((err: unknown) => {
@@ -71,6 +73,7 @@ export async function fetchQuotes(): Promise<QuotesPayload> {
         return undefined;
       }),
     getHistorySeries(symbols),
+    getCalendar(),
   ]);
 
   const list: RawQuote[] = Array.isArray(raw)
@@ -146,5 +149,6 @@ export async function fetchQuotes(): Promise<QuotesPayload> {
   return {
     fetchedAt: new Date().toISOString(),
     quotes,
+    calendar,
   };
 }

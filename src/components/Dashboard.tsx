@@ -15,6 +15,7 @@ import { SentimentBanner } from "./SentimentBanner";
 import { InsightPanel } from "./InsightPanel";
 import { SessionStrip } from "./SessionStrip";
 import { VTProjection } from "./VTProjection";
+import { CalendarStrip } from "./CalendarStrip";
 
 const REFRESH_MS = 60_000;
 
@@ -114,7 +115,11 @@ export function Dashboard({ initial }: Props) {
 
       <SessionStrip />
 
-      <SentimentBanner sentiment={sentiment} />
+      <CalendarStrip events={payload.calendar} />
+
+      <div className="mt-6">
+        <SentimentBanner sentiment={sentiment} />
+      </div>
 
       <VTProjection quotes={payload.quotes} />
 
