@@ -1,0 +1,414 @@
+/**
+ * AI market analysis via Gemini 3 Flash (with Google Search grounding) or
+ * DeepSeek V4 Flash.
+ *
+ * Builds a compact synthesis context from the live quotes payload + derived
+ * signals (sentiment, insights, VT projection, session states, calendar),
+ * sends it to the model, parses a strict JSON response with three short
+ * sections, and (for Gemini) returns any web-grounding sources cited.
+ *
+ * Configure with either `GEMINI_API_KEY` or `DEEPSEEK_API_KEY` in .env.local
+ * and Vercel project settings.
+ */
+
+import type { Quote, QuotesPayload } from "./quotes";
+import { computeSentiment } from "./sentiment";
+import { computeInsights } from "./insights";
+import { computeVTProjection } from "./vt";
+import { eventInfo } from "./event-info";
+import { SESSIONS, getSessionStatus, formatDuration } from "./sessions";
+
+const DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1/chat/completions";
+const DEEPSEEK_MODEL = "deepseek-v4-flash";
+
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+/**
+ * Default model. `gemini-3.1-flash-lite` was chosen for its much higher free
+ * limits (15 RPM / 500 RPD) over `gemini-3.5-flash` (5 RPM / 20 RPD). On
+ * personal-tier keys 3.x models' grounding quota is exhausted and 429s — the
+ * `callGemini` retry transparently drops grounding so the synthesis still
+ * works. Swap to `gemini-2.5-flash` via env if you want grounded analysis
+ * (live web context) at the cost of tighter daily limits.
+ */
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.1-flash-lite";
+// Default off because Gemini 3.x's grounding quota is exhausted on free-tier
+// keys and the grounded attempt always 429s before our fallback retries
+// without it (wasting ~200ms per generation). Set GEMINI_GROUNDING=on if you
+// switch GEMINI_MODEL to gemini-2.5-flash, where grounding still works.
+const GEMINI_GROUNDING =
+  (process.env.GEMINI_GROUNDING ?? "off").toLowerCase() === "on";
+
+export type GroundingSource = {
+  title: string;
+  uri: string;
+};
+
+export type Analysis = {
+  setup: string;
+  interesting: string;
+  watch: string;
+};
+
+export type AnalyzeResult =
+  | {
+      ok: true;
+      analysis: Analysis;
+      latencyMs: number;
+      provider: "gemini" | "deepseek";
+      sources?: GroundingSource[];
+      searchQueries?: string[];
+    }
+  | { ok: false; error: string };
+
+const SWISS_TIME = new Intl.DateTimeFormat("de-CH", {
+  timeZone: "Europe/Zurich",
+  weekday: "short",
+  day: "2-digit",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+function compactTickers(quotes: Quote[]) {
+  return quotes.map((q) => {
+    const low = q.range30d.low;
+    const high = q.range30d.high;
+    const position =
+      low != null && high != null && q.price != null && high !== low
+        ? Math.round(((q.price - low) / (high - low)) * 100)
+        : null;
+    return {
+      symbol: q.symbol,
+      name: q.config.short,
+      category: q.config.category,
+      price: q.price,
+      changePct: q.changePercent,
+      marketState: q.marketState,
+      range30dPositionPct: position,
+    };
+  });
+}
+
+function compactSessions(now: Date) {
+  return SESSIONS.map((s) => {
+    const st = getSessionStatus(now, s);
+    if (st.state === "open")
+      return {
+        name: s.name,
+        state: "open",
+        closesInMin: Math.round(st.closesInMs / 60000),
+      };
+    if (st.state === "break")
+      return {
+        name: s.name,
+        state: "break",
+        resumesInMin: Math.round(st.resumesInMs / 60000),
+      };
+    return {
+      name: s.name,
+      state: "closed",
+      opensInMin: st.opensInMs >= 0 ? Math.round(st.opensInMs / 60000) : null,
+    };
+  });
+}
+
+function compactCalendar(events: QuotesPayload["calendar"], now: Date) {
+  return events
+    .filter((e) => new Date(e.date).getTime() >= now.getTime() - 30 * 60 * 1000)
+    .slice(0, 8)
+    .map((e) => {
+      const info = eventInfo(e.title);
+      return {
+        currency: e.currency,
+        title: e.title,
+        when: new Date(e.date).toISOString(),
+        inMin: Math.round((new Date(e.date).getTime() - now.getTime()) / 60000),
+        impact: e.impact,
+        forecast: e.forecast || null,
+        previous: e.previous || null,
+        meaning: info.what + " " + info.hot + (info.cool ? " " + info.cool : ""),
+        tier: info.tier,
+      };
+    });
+}
+
+export function buildContext(payload: QuotesPayload) {
+  const now = new Date();
+  const sentiment = computeSentiment(payload.quotes);
+  const insights = computeInsights(payload.quotes);
+  const vt = computeVTProjection(payload.quotes);
+
+  return {
+    now: {
+      iso: now.toISOString(),
+      swiss: SWISS_TIME.format(now),
+    },
+    tickers: compactTickers(payload.quotes),
+    sentiment: {
+      score: sentiment.score,
+      label: sentiment.label,
+      headline: sentiment.headline,
+      topDrivers: sentiment.drivers,
+    },
+    vtProjection: {
+      projectedPct: vt.projectedPct,
+      coveredFraction: vt.coveredFraction,
+      contributions: vt.contributions.map((c) => ({
+        region: c.region,
+        weight: c.weight,
+        changePct: c.changePct,
+        contribution: c.contribution,
+      })),
+      usMarketState: vt.usState,
+    },
+    insights: insights.map((i) => ({
+      severity: i.severity,
+      title: i.title,
+      body: i.body,
+      tickers: i.tickers,
+    })),
+    sessions: compactSessions(now),
+    calendar: compactCalendar(payload.calendar, now),
+  };
+}
+
+const SYSTEM_PROMPT = `You are a market-context synthesizer for a personal dashboard. The user is a Swiss-based long-term investor whose main holding is VT (Vanguard Total World ETF). They are CURIOUS about the market but do NOT trade around it. Your job is to read the live data and write a calm, direct synthesis.
+
+Rules:
+- No disclaimers. No "not financial advice". No hedging. The user knows.
+- Concrete: cite actual numbers from the data.
+- Each section is 2-4 short sentences. Total output under 200 words.
+- Write like an experienced macro analyst talking to a peer, not a textbook.
+- If something is unremarkable, say so. "Quiet tape" is a valid observation.
+- Reference Swiss time for upcoming events.
+
+Output STRICT JSON with exactly these three keys (all strings):
+- "setup": What is the tape doing right now? Use the sentiment, biggest movers, session state.
+- "interesting": What divergence, rotation, or unusual pattern is worth noting? Use the insights and 30d range positions.
+- "watch": What is coming up that could move things? Use the calendar (next high-impact events) and session timing.
+
+Do not include any text outside the JSON. No code fences. No markdown.`;
+
+function extractJson(text: string): string {
+  // Strip markdown code fences if the model wrapped its output despite being
+  // told not to. Handle both ```json and bare ``` fences.
+  const trimmed = text.trim();
+  if (trimmed.startsWith("```")) {
+    const stripped = trimmed
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "");
+    return stripped.trim();
+  }
+  return trimmed;
+}
+
+function parseAnalysis(text: string): Analysis | { error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(extractJson(text));
+  } catch {
+    return { error: `Model did not return valid JSON: ${text.slice(0, 200)}` };
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    typeof (parsed as Record<string, unknown>).setup !== "string" ||
+    typeof (parsed as Record<string, unknown>).interesting !== "string" ||
+    typeof (parsed as Record<string, unknown>).watch !== "string"
+  ) {
+    return { error: "Model JSON missing one of: setup, interesting, watch." };
+  }
+  return parsed as Analysis;
+}
+
+type GeminiCandidate = {
+  content?: { parts?: Array<{ text?: string }> };
+  groundingMetadata?: {
+    webSearchQueries?: string[];
+    groundingChunks?: Array<{ web?: { uri?: string; title?: string } }>;
+  };
+};
+
+type GeminiResponse = {
+  candidates?: Array<GeminiCandidate>;
+  error?: { code?: number; message?: string };
+};
+
+async function callGemini(
+  apiKey: string,
+  userContent: string,
+  withGrounding: boolean,
+): Promise<{ res: Response } | { error: string }> {
+  const endpoint = `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: userContent }] }],
+        // Note: tool name is `google_search` (snake_case). camelCase silently
+        // mis-routes and returns 429 RESOURCE_EXHAUSTED. Also: grounding is
+        // mutually exclusive with responseMimeType structured output, so we
+        // lean on prompt + parseAnalysis() to extract the JSON.
+        ...(withGrounding ? { tools: [{ google_search: {} }] } : {}),
+        generationConfig: {
+          temperature: 0.4,
+          maxOutputTokens: 1200,
+        },
+      }),
+      cache: "no-store",
+    });
+    return { res };
+  } catch (err) {
+    return {
+      error: `Network error reaching Gemini: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+export async function runAnalysisGemini(
+  payload: QuotesPayload,
+): Promise<AnalyzeResult> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return {
+      ok: false,
+      error:
+        "GEMINI_API_KEY is not set. Add it to .env.local locally and to Vercel project settings.",
+    };
+  }
+
+  const context = buildContext(payload);
+  // For Gemini we fold the system prompt into the user content because
+  // single-turn calls play nicest with the google_search tool.
+  const userContent = `${SYSTEM_PROMPT}\n\nLive data:\n\n${JSON.stringify(
+    context,
+    null,
+    2,
+  )}\n\nIf relevant, use Google Search to check for breaking news that would change the read (geopolitics, central-bank surprises, major earnings). Only cite real, verifiable items. Remember: respond ONLY with the JSON object — no prose, no markdown.`;
+
+  const started = Date.now();
+  let useGrounding = GEMINI_GROUNDING;
+
+  let call = await callGemini(apiKey, userContent, useGrounding);
+  if ("error" in call) return { ok: false, error: call.error };
+
+  // If grounding hits a quota issue (some models / projects have a separate
+  // grounding bucket that empties before the model's own quota), retry once
+  // without grounding so the analysis still works.
+  if (!call.res.ok && useGrounding && call.res.status === 429) {
+    useGrounding = false;
+    call = await callGemini(apiKey, userContent, false);
+    if ("error" in call) return { ok: false, error: call.error };
+  }
+
+  if (!call.res.ok) {
+    const detail = await call.res.text().catch(() => "");
+    return {
+      ok: false,
+      error: `Gemini returned HTTP ${call.res.status}: ${detail.slice(0, 300)}`,
+    };
+  }
+
+  const json = (await call.res.json()) as GeminiResponse;
+  const candidate = json.candidates?.[0];
+  const text =
+    candidate?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+
+  const parsed = parseAnalysis(text);
+  if ("error" in parsed) return { ok: false, error: parsed.error };
+
+  const sources: GroundingSource[] = (
+    candidate?.groundingMetadata?.groundingChunks ?? []
+  )
+    .map((c) => ({ uri: c.web?.uri ?? "", title: c.web?.title ?? "" }))
+    .filter((s) => s.uri.length > 0);
+
+  const seen = new Set<string>();
+  const dedupedSources = sources.filter((s) =>
+    seen.has(s.uri) ? false : (seen.add(s.uri), true),
+  );
+
+  return {
+    ok: true,
+    analysis: parsed,
+    latencyMs: Date.now() - started,
+    provider: "gemini",
+    sources: dedupedSources.length > 0 ? dedupedSources : undefined,
+    searchQueries: candidate?.groundingMetadata?.webSearchQueries,
+  };
+}
+
+export async function runAnalysisDeepSeek(
+  payload: QuotesPayload,
+): Promise<AnalyzeResult> {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) {
+    return {
+      ok: false,
+      error:
+        "DEEPSEEK_API_KEY is not set. Add it to .env.local locally and to Vercel project settings.",
+    };
+  }
+
+  const context = buildContext(payload);
+  const userContent = `Live data:\n\n${JSON.stringify(context, null, 2)}`;
+
+  const started = Date.now();
+  let res: Response;
+  try {
+    res = await fetch(DEEPSEEK_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: DEEPSEEK_MODEL,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userContent },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.4,
+        max_tokens: 600,
+      }),
+      cache: "no-store",
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Network error reaching DeepSeek: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    return {
+      ok: false,
+      error: `DeepSeek returned HTTP ${res.status}: ${detail.slice(0, 200)}`,
+    };
+  }
+
+  type ChatResponse = {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const json = (await res.json()) as ChatResponse;
+  const content = json.choices?.[0]?.message?.content ?? "";
+
+  const parsed = parseAnalysis(content);
+  if ("error" in parsed) return { ok: false, error: parsed.error };
+
+  return {
+    ok: true,
+    analysis: parsed,
+    latencyMs: Date.now() - started,
+    provider: "deepseek",
+  };
+}
+
+// Re-export for callers that want to peek at what we'd send the model.
+export type AnalysisContext = ReturnType<typeof buildContext>;
+// Re-export formatDuration to keep import surface tight in route/UI.
+export { formatDuration };

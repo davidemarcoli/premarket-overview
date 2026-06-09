@@ -16,6 +16,7 @@ import { InsightPanel } from "./InsightPanel";
 import { SessionStrip } from "./SessionStrip";
 import { VTProjection } from "./VTProjection";
 import { CalendarStrip } from "./CalendarStrip";
+import { AnalysisPanel } from "./AnalysisPanel";
 
 const REFRESH_MS = 60_000;
 
@@ -144,6 +145,8 @@ export function Dashboard({ initial }: Props) {
       </div>
 
       <VTProjection quotes={payload.quotes} />
+
+      <AnalysisPanel />
 
       <InsightPanel insights={insights} />
 

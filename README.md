@@ -41,6 +41,43 @@ Then open http://localhost:3000 (or `PORT=3737 pnpm dev` for a different port).
 
 Auto-refreshes every 60 seconds; manual refresh button in the header.
 
+## AI synthesis (optional)
+
+The "AI synthesis" panel is wired to **Gemini 3.1 Flash-Lite** by default
+(15 RPM / 500 RPD free), with **DeepSeek V4 Flash** as a code-level
+alternative.
+
+```bash
+# .env.local — only the active provider's key is needed.
+GEMINI_API_KEY=AQ.Ab...           # for Gemini
+# GEMINI_MODEL=gemini-2.5-flash   # optional override (5 RPM / 20 RPD but supports grounding)
+# GEMINI_GROUNDING=on             # only worth setting with gemini-2.5-flash; 3.x grounding 429s on free-tier keys
+# DEEPSEEK_API_KEY=sk-...         # if you swap providers in src/app/api/analyze/route.ts
+```
+
+On Vercel, set the same variable in **Project Settings → Environment Variables**
+(Production + Preview). Without a key the panel renders but the
+"Generate analysis" button returns a clear error.
+
+**Why these defaults**: `gemini-3.5-flash` and `gemini-2.5-flash` are both
+capped at 5 RPM / 20 RPD on free-tier keys, which is too tight for casual
+dashboard use. `gemini-3.1-flash-lite` is 500 RPD — the analysis is slightly
+terser but the daily headroom matters more for "VT-and-chill" use. Google
+Search grounding (live news) is gone on all Gemini 3.x for free-tier keys
+right now; if it comes back, flip `GEMINI_MODEL` + `GEMINI_GROUNDING` and it
+just works (the API code already handles snake-case `google_search` and the
+grounding/responseMimeType incompatibility).
+
+**Swapping providers**: change `runAnalysisGemini` to `runAnalysisDeepSeek` at
+the top of `src/app/api/analyze/route.ts`.
+
+**Caching**: the route caches the last analysis in-process for 10 minutes and
+coalesces concurrent calls via a single in-flight promise. This keeps even a
+busy tab safely inside Gemini's daily quota.
+
+**Grounding sources**: when Gemini does use Google Search, cited URLs render
+as chips under the analysis so the live-news context can be verified.
+
 ## Where things live
 
 - `src/lib/tickers.ts` — ticker list, categories, descriptions, interpretations,
@@ -50,6 +87,7 @@ Auto-refreshes every 60 seconds; manual refresh button in the header.
 - `src/app/api/quotes/route.ts` — `/api/quotes` endpoint (no-store).
 - `src/components/Dashboard.tsx` — client component with auto-refresh.
 - `src/components/TickerCard.tsx`, `SentimentBanner.tsx` — UI.
+- `src/lib/analyze.ts`, `src/app/api/analyze/route.ts`, `src/components/AnalysisPanel.tsx` — DeepSeek-backed AI synthesis (server-cached 10 min).
 
 ## Caveats
 
