@@ -169,7 +169,7 @@ export function AnalysisPanel() {
 
         {!cached && !error && loading && (
           <div className="mt-3 rounded-xl bg-zinc-50 px-4 py-3 text-sm text-zinc-500 ring-1 ring-zinc-200/70 dark:bg-zinc-950/60 dark:ring-zinc-800">
-            Generating first synthesis… usually takes 5–10 seconds with grounding.
+            Generating first synthesis… ~10–15 seconds with grounded Gemma.
           </div>
         )}
 

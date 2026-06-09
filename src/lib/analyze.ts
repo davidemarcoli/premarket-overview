@@ -125,17 +125,30 @@ function compactSessions(now: Date) {
   });
 }
 
+const SWISS_DAY_TIME = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Zurich",
+  weekday: "short",
+  day: "2-digit",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
 function compactCalendar(events: QuotesPayload["calendar"], now: Date) {
   return events
     .filter((e) => new Date(e.date).getTime() >= now.getTime() - 30 * 60 * 1000)
     .slice(0, 8)
     .map((e) => {
       const info = eventInfo(e.title);
+      const date = new Date(e.date);
       return {
         currency: e.currency,
         title: e.title,
-        when: new Date(e.date).toISOString(),
-        inMin: Math.round((new Date(e.date).getTime() - now.getTime()) / 60000),
+        // Pre-formatted Swiss-local time so the model never has to do TZ math
+        // (it gets CEST vs CET wrong otherwise — off by an hour in summer).
+        whenSwiss: SWISS_DAY_TIME.format(date),
+        inMin: Math.round((date.getTime() - now.getTime()) / 60000),
         impact: e.impact,
         forecast: e.forecast || null,
         previous: e.previous || null,
@@ -185,22 +198,26 @@ export function buildContext(payload: QuotesPayload) {
   };
 }
 
-const SYSTEM_PROMPT = `You are a market-context synthesizer for a personal dashboard. The user is a Swiss-based long-term investor whose main holding is VT (Vanguard Total World ETF). They are CURIOUS about the market but do NOT trade around it. Your job is to read the live data and write a calm, direct synthesis.
+const SYSTEM_PROMPT = `You are a market-context synthesizer for a personal dashboard. The user is a Swiss-based long-term investor whose main holding is VT (Vanguard Total World ETF). They are CURIOUS about the market but do NOT trade around it. Write like a senior macro strategist briefing a peer who already understands the basics.
 
 Rules:
-- No disclaimers. No "not financial advice". No hedging. The user knows.
-- Concrete: cite actual numbers from the data.
-- Each section is 2-4 short sentences. Total output under 200 words.
-- Write like an experienced macro analyst talking to a peer, not a textbook.
-- If something is unremarkable, say so. "Quiet tape" is a valid observation.
-- Reference Swiss time for upcoming events.
+- No disclaimers, no hedging, no "not financial advice", no "in conclusion".
+- Concrete and specific. Cite tickers and exact percentages from the data. Avoid generic phrases like "the market is mixed".
+- Cross-reference signals across the dataset. Examples: link a VIX spike to which futures are red, connect a dollar move to commodity reactions, flag when small caps and large caps disagree.
+- Use the recent7dCloses array to spot multi-day trends ("fourth red day in a row", "first up day after a week of weakness"). The 30d range position tells you if a level is stretched.
+- Reference Swiss time (HH:MM) for upcoming events. Today's date is in the "now" field.
+- If grounding (Google Search) surfaces relevant headlines, weave them into the why — name the catalyst, not just "rumors" or "news".
+- "Quiet tape" is valid when warranted. Don't manufacture drama.
 
 Output STRICT JSON with exactly these three keys (all strings):
-- "setup": What is the tape doing right now? Use the sentiment, biggest movers, session state.
-- "interesting": What divergence, rotation, or unusual pattern is worth noting? Use the insights and 30d range positions.
-- "watch": What is coming up that could move things? Use the calendar (next high-impact events) and session timing.
 
-Do not include any text outside the JSON. No code fences. No markdown.`;
+- "setup" (4-6 sentences, ~80-120 words): What is the tape doing right now? Lead with the dominant move. Cover breadth (small caps vs large caps), sector rotation (tech vs value), the FX and yield backdrop, and the current session state. Name the single biggest signal driving sentiment.
+
+- "interesting" (4-6 sentences, ~80-120 words): What divergence, rotation, multi-day trend, or unusual pattern matters? Cross-reference the data — e.g. if VIX is up but ES is also up, flag the contradiction. Cite recent7dCloses when relevant. Note any range extremes (positions near 0% or 100% of 30d range). If insights are firing, expand on the most important one in your own words.
+
+- "watch" (3-5 sentences, ~60-100 words): What could move things next? Lead with the highest-impact scheduled release (cite Swiss time and forecast vs previous). Note imminent session transitions (US open/close in the next few hours). If grounding returned relevant breaking news, mention it as a catalyst risk.
+
+Output only the JSON. Code fences are tolerated but unnecessary.`;
 
 function extractJson(text: string): string {
   // Strip markdown code fences if the model wrapped its output despite being
@@ -268,10 +285,13 @@ async function callGemini(
         ...(withGrounding ? { tools: [{ google_search: {} }] } : {}),
         generationConfig: {
           temperature: 0.4,
-          // Generous cap because Gemma's chain-of-thought is billed against
-          // output budget. A typical analysis ends up with ~500-1500 thought
-          // tokens + ~250 visible JSON tokens.
-          maxOutputTokens: 2500,
+          // Room for the longer 3-section JSON plus any minimal thinking
+          // tokens Gemma still emits.
+          maxOutputTokens: 1500,
+          // Gemma 4 supports thinkingLevel MINIMAL only (LOW/HIGH are
+          // rejected). Cuts end-to-end latency from ~30s to ~2s with no
+          // visible quality loss on synthesis tasks like this.
+          thinkingConfig: { thinkingLevel: "MINIMAL" },
         },
       }),
       cache: "no-store",
