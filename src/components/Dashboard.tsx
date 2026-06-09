@@ -58,6 +58,12 @@ export function Dashboard({ initial }: Props) {
 
   const sentiment = useMemo(() => computeSentiment(payload.quotes), [payload]);
   const insights = useMemo(() => computeInsights(payload.quotes), [payload]);
+  // Server-deterministic timestamp used to seed time-dependent components so
+  // SSR and first client render produce identical HTML (no hydration flash).
+  const initialNowMs = useMemo(
+    () => new Date(payload.fetchedAt).getTime(),
+    [payload.fetchedAt],
+  );
 
   const grouped = useMemo(() => {
     const map = new Map<TickerCategory, QuotesPayload["quotes"]>();
@@ -69,17 +75,30 @@ export function Dashboard({ initial }: Props) {
     return map;
   }, [payload]);
 
+  const fetchedAt = useMemo(() => new Date(payload.fetchedAt), [payload.fetchedAt]);
+
+  // Stable Swiss-local time, identical on server and client → no hydration flash.
+  const fetchedAtSwiss = useMemo(
+    () =>
+      new Intl.DateTimeFormat("de-CH", {
+        timeZone: "Europe/Zurich",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(fetchedAt),
+    [fetchedAt],
+  );
+
+  // Relative "x ago" only after mount, as it depends on the client clock.
   const fetchedAgo = useMemo(() => {
-    const diff = Math.max(
-      0,
-      Math.floor((Date.now() - new Date(payload.fetchedAt).getTime()) / 1000),
-    );
+    if (!mounted) return null;
+    const diff = Math.max(0, Math.floor((Date.now() - fetchedAt.getTime()) / 1000));
+    if (diff < 5) return "just now";
     if (diff < 60) return `${diff}s ago`;
     const m = Math.floor(diff / 60);
-    if (m < 60) return `${m}m ${diff % 60}s ago`;
+    if (m < 60) return `${m}m ago`;
     const h = Math.floor(m / 60);
     return `${h}h ${m % 60}m ago`;
-  }, [payload.fetchedAt, tick]);
+  }, [fetchedAt, tick, mounted]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -95,7 +114,10 @@ export function Dashboard({ initial }: Props) {
         </div>
         <div className="flex items-center gap-3 text-xs text-zinc-500">
           <span className="tabular-nums" suppressHydrationWarning>
-            Updated {mounted ? fetchedAgo : "…"}
+            Updated {fetchedAtSwiss}
+            {fetchedAgo && (
+              <span className="ml-1 text-zinc-400">({fetchedAgo})</span>
+            )}
           </span>
           <button
             onClick={refresh}
@@ -113,9 +135,9 @@ export function Dashboard({ initial }: Props) {
         </div>
       )}
 
-      <SessionStrip />
+      <SessionStrip initialNowMs={initialNowMs} />
 
-      <CalendarStrip events={payload.calendar} />
+      <CalendarStrip events={payload.calendar} initialNowMs={initialNowMs} />
 
       <div className="mt-6">
         <SentimentBanner sentiment={sentiment} />

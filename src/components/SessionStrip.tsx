@@ -8,6 +8,11 @@ import {
   type SessionStatus,
 } from "@/lib/sessions";
 
+type Props = {
+  /** Server-computed "now" so SSR and first client render match. */
+  initialNowMs: number;
+};
+
 type Cell = {
   id: string;
   name: string;
@@ -40,8 +45,8 @@ function classesFor(status: SessionStatus, kind: Cell["kind"]) {
   };
 }
 
-export function SessionStrip() {
-  const [now, setNow] = useState<Date | null>(null);
+export function SessionStrip({ initialNowMs }: Props) {
+  const [now, setNow] = useState<Date>(() => new Date(initialNowMs));
 
   useEffect(() => {
     setNow(new Date());
@@ -50,7 +55,6 @@ export function SessionStrip() {
   }, []);
 
   const cells: Cell[] = useMemo(() => {
-    if (!now) return [];
     return SESSIONS.map((s) => ({
       id: s.id,
       name: s.name,
@@ -67,7 +71,7 @@ export function SessionStrip() {
   return (
     <section className="mb-6" suppressHydrationWarning>
       <div className="rounded-2xl bg-white p-4 ring-1 ring-zinc-200/70 dark:bg-zinc-900/60 dark:ring-zinc-800">
-        {featured && now && (
+        {featured && (
           <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
             <div>
               <div className="text-xs uppercase tracking-wide text-zinc-500">

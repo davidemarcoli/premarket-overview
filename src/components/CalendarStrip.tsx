@@ -7,6 +7,8 @@ import { formatDuration } from "@/lib/sessions";
 
 type Props = {
   events: CalendarEvent[];
+  /** Server-computed "now" so SSR and first client render match. */
+  initialNowMs: number;
 };
 
 const IMPACT_TONE: Record<CalendarImpact, { dot: string; chip: string; label: string }> = {
@@ -50,8 +52,8 @@ function isSameSwissDay(a: Date, b: Date): boolean {
   return SWISS_DAY.format(a) === SWISS_DAY.format(b);
 }
 
-export function CalendarStrip({ events }: Props) {
-  const [now, setNow] = useState<Date | null>(null);
+export function CalendarStrip({ events, initialNowMs }: Props) {
+  const [now, setNow] = useState<Date>(() => new Date(initialNowMs));
   const [expanded, setExpanded] = useState(false);
   const [showMedium, setShowMedium] = useState(false);
 
@@ -66,13 +68,11 @@ export function CalendarStrip({ events }: Props) {
   }, [events, showMedium]);
 
   const upcoming = useMemo(() => {
-    if (!now) return [];
     const cutoff = now.getTime() - 30 * 60 * 1000;
     return filtered.filter((e) => new Date(e.date).getTime() >= cutoff);
   }, [filtered, now]);
 
   const remainingThisWeek = useMemo(() => {
-    if (!now) return 0;
     return events.filter(
       (e) =>
         e.impact === "high" && new Date(e.date).getTime() >= now.getTime() - 30 * 60 * 1000,
@@ -80,7 +80,6 @@ export function CalendarStrip({ events }: Props) {
   }, [events, now]);
 
   const nextHigh = useMemo(() => {
-    if (!now) return null;
     return events
       .filter(
         (e) =>
@@ -98,19 +97,17 @@ export function CalendarStrip({ events }: Props) {
           <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
             Economic calendar
           </h2>
-          {now && (
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="text-xs font-medium text-zinc-600 underline-offset-2 hover:underline dark:text-zinc-400"
-            >
-              {expanded
-                ? "Hide full week"
-                : `Show full week (${remainingThisWeek} high-impact)`}
-            </button>
-          )}
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="text-xs font-medium text-zinc-600 underline-offset-2 hover:underline dark:text-zinc-400"
+          >
+            {expanded
+              ? "Hide full week"
+              : `Show full week (${remainingThisWeek} high-impact)`}
+          </button>
         </div>
 
-        {now && nextHigh && (
+        {nextHigh && (
           <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-xl bg-rose-50/70 px-4 py-3 ring-1 ring-rose-200/70 dark:bg-rose-950/30 dark:ring-rose-900/50">
             <div className="flex items-baseline gap-2 min-w-0">
               <span className="text-[10px] font-medium uppercase tracking-wide text-rose-700 dark:text-rose-300">
@@ -148,13 +145,13 @@ export function CalendarStrip({ events }: Props) {
           </div>
         )}
 
-        {now && !nextHigh && (
+        {!nextHigh && (
           <div className="mt-3 rounded-xl bg-zinc-50 px-4 py-3 text-xs text-zinc-500 ring-1 ring-zinc-200/70 dark:bg-zinc-950/60 dark:ring-zinc-800">
             No more high-impact releases this week. Calm tape ahead.
           </div>
         )}
 
-        {expanded && now && (
+        {expanded && (
           <div className="mt-4 flex items-center justify-end">
             <button
               onClick={() => setShowMedium((v) => !v)}
@@ -165,7 +162,7 @@ export function CalendarStrip({ events }: Props) {
           </div>
         )}
 
-        {expanded && now && upcoming.length === 0 && (
+        {expanded && upcoming.length === 0 && (
           <div className="mt-2 rounded-xl bg-zinc-50 p-4 text-sm text-zinc-500 ring-1 ring-zinc-200/70 dark:bg-zinc-950/60 dark:ring-zinc-800">
             {showMedium
               ? "No more medium-or-high-impact releases scheduled this week."
@@ -173,7 +170,7 @@ export function CalendarStrip({ events }: Props) {
           </div>
         )}
 
-        {expanded && now && upcoming.length > 0 && (
+        {expanded && upcoming.length > 0 && (
           <ul className="mt-4 space-y-3">
             {upcoming.map((e, i) => {
               const eventAt = new Date(e.date);
