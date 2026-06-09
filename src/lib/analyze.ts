@@ -30,10 +30,6 @@ const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
  *    where the grounded call 429s.
  * 3. Higher-quality synthesis than gemini-3.1-flash-lite.
  *
- * Trade-off: Gemma is a "thinking" model. The chain-of-thought is billed
- * against `maxOutputTokens`, so we set it generously. End-to-end latency runs
- * ~5–10s per generation, which is fine for a button-triggered panel.
- *
  * Alternatives via env override:
  *   GEMINI_MODEL=gemma-4-26b-a4b-it     # smaller MoE, faster, similar quota
  *   GEMINI_MODEL=gemini-2.5-flash       # grounding works, tight 20 RPD limit
@@ -198,24 +194,23 @@ export function buildContext(payload: QuotesPayload) {
   };
 }
 
-const SYSTEM_PROMPT = `You are a market-context synthesizer for a personal dashboard. The user is a Swiss-based long-term investor whose main holding is VT (Vanguard Total World ETF). They are CURIOUS about the market but do NOT trade around it. Write like a senior macro strategist briefing a peer who already understands the basics.
+const SYSTEM_PROMPT = `You summarise premarket market data for a personal dashboard. The user is a Swiss-based long-term VT investor — curious about what's moving markets, but they don't trade the news. Write in plain English, like a knowledgeable colleague giving a quick read of the morning.
 
 Rules:
-- No disclaimers, no hedging, no "not financial advice", no "in conclusion".
-- Concrete and specific. Cite tickers and exact percentages from the data. Avoid generic phrases like "the market is mixed".
-- Cross-reference signals across the dataset. Examples: link a VIX spike to which futures are red, connect a dollar move to commodity reactions, flag when small caps and large caps disagree.
-- Use the recent7dCloses array to spot multi-day trends ("fourth red day in a row", "first up day after a week of weakness"). The 30d range position tells you if a level is stretched.
+- No disclaimers, no hedging, no "not financial advice".
+- Concrete and specific. Name tickers and exact numbers. Avoid generic filler.
+- Use the recent7dCloses array to note multi-day trends ("fourth red day in a row"). The 30d range position tells you if a level is stretched.
 - Reference Swiss time (HH:MM) for upcoming events. Today's date is in the "now" field.
-- If grounding (Google Search) surfaces relevant headlines, weave them into the why — name the catalyst, not just "rumors" or "news".
-- "Quiet tape" is valid when warranted. Don't manufacture drama.
+- If Google Search found relevant headlines, mention the catalyst by name.
+- Only flag things worth knowing — don't manufacture drama.
 
 Output STRICT JSON with exactly these three keys (all strings):
 
-- "setup" (4-6 sentences, ~80-120 words): What is the tape doing right now? Lead with the dominant move. Cover breadth (small caps vs large caps), sector rotation (tech vs value), the FX and yield backdrop, and the current session state. Name the single biggest signal driving sentiment.
+- "setup" (3-5 sentences, ~60-100 words): What's happening right now? Lead with the main move. Mention which sectors or asset classes are driving it, and the one biggest signal.
 
-- "interesting" (4-6 sentences, ~80-120 words): What divergence, rotation, multi-day trend, or unusual pattern matters? Cross-reference the data — e.g. if VIX is up but ES is also up, flag the contradiction. Cite recent7dCloses when relevant. Note any range extremes (positions near 0% or 100% of 30d range). If insights are firing, expand on the most important one in your own words.
+- "interesting" (3-5 sentences, ~60-100 words): What stands out? A divergence, a multi-day pattern, anything unusual the user wouldn't notice from glancing at the cards. Keep it concise.
 
-- "watch" (3-5 sentences, ~60-100 words): What could move things next? Lead with the highest-impact scheduled release (cite Swiss time and forecast vs previous). Note imminent session transitions (US open/close in the next few hours). If grounding returned relevant breaking news, mention it as a catalyst risk.
+- "watch" (2-4 sentences, ~40-80 words): What could move things next? Lead with the highest-impact upcoming event (Swiss time). Mention any session transitions or news catalysts worth tracking.
 
 Output only the JSON. Code fences are tolerated but unnecessary.`;
 
@@ -285,9 +280,6 @@ async function callGemini(
         ...(withGrounding ? { tools: [{ google_search: {} }] } : {}),
         generationConfig: {
           temperature: 0.4,
-          // Room for the longer 3-section JSON plus any minimal thinking
-          // tokens Gemma still emits.
-          maxOutputTokens: 1500,
           // Gemma 4 supports thinkingLevel MINIMAL only (LOW/HIGH are
           // rejected). Cuts end-to-end latency from ~30s to ~2s with no
           // visible quality loss on synthesis tasks like this.
