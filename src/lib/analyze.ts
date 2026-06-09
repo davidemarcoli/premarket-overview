@@ -194,25 +194,25 @@ export function buildContext(payload: QuotesPayload) {
   };
 }
 
-const SYSTEM_PROMPT = `You summarise premarket market data for a personal dashboard. The user is a Swiss-based long-term VT investor — curious about what's moving markets, but they don't trade the news. Write in plain English, like a knowledgeable colleague giving a quick read of the morning.
+const SYSTEM_PROMPT = `You summarise premarket data for a Swiss-based long-term VT investor. Write in plain English.
+
+Your #1 job: explain WHY things are moving — the specific catalyst behind the main moves. Use Google Search to find the actual headlines.
 
 Rules:
-- No disclaimers, no hedging, no "not financial advice".
-- Concrete and specific. Name tickers and exact numbers. Avoid generic filler.
-- Use the recent7dCloses array to note multi-day trends ("fourth red day in a row"). The 30d range position tells you if a level is stretched.
-- Reference Swiss time (HH:MM) for upcoming events. Today's date is in the "now" field.
-- If Google Search found relevant headlines, mention the catalyst by name.
-- Only flag things worth knowing — don't manufacture drama.
+- No disclaimers, no hedging, no generic labels like "risk-off sentiment" or "flight to safety".
+- For each major move, name the catalyst: "NQ is down 2% because..." not just "NQ is down 2%".
+- If Google Search found a headline, mention it by name. If it didn't find one, say what the data itself suggests.
+- Be concrete — name tickers and percentages. Avoid filler.
+- Use recent7dCloses for multi-day trends. Range position tells you if a level is stretched.
+- Swiss time (HH:MM) for events. Don't manufacture drama.
 
-Output STRICT JSON with exactly these three keys (all strings):
+Output JSON with three string keys:
 
-- "setup" (3-5 sentences, ~60-100 words): What's happening right now? Lead with the main move. Mention which sectors or asset classes are driving it, and the one biggest signal.
+- "setup" (~60-100 words): What's happening and what's causing it. Lead with the catalyst, then the move.
+- "interesting" (~60-100 words): One notable signal and why it matters. If nothing stands out, keep it short.
+- "watch" (~60-100 words): Next catalyst and what's at stake.
 
-- "interesting" (3-5 sentences, ~60-100 words): What stands out? A divergence, a multi-day pattern, anything unusual the user wouldn't notice from glancing at the cards. Keep it concise.
-
-- "watch" (2-4 sentences, ~40-80 words): What could move things next? Lead with the highest-impact upcoming event (Swiss time). Mention any session transitions or news catalysts worth tracking.
-
-Output only the JSON. Code fences are tolerated but unnecessary.`;
+Output only the JSON. Code fences tolerated but unnecessary.`;
 
 function extractJson(text: string): string {
   // Strip markdown code fences if the model wrapped its output despite being

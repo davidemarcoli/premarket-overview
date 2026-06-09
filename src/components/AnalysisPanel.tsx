@@ -141,7 +141,7 @@ export function AnalysisPanel() {
               AI synthesis
             </h2>
             <p className="text-xs text-zinc-500">
-              On-demand DeepSeek read of the current tape, signals, and calendar.
+              AI read of the current market, based on recent news.
               Server-cached 10 min between regens.
             </p>
           </div>
